@@ -2816,6 +2816,15 @@ UniValue getwalletinfo(const JSONRPCRequest& request)
     return obj;
 }
 
+static bool ticketMatured(const Consensus::Params& params, int txHeight, int currentHeight) {
+    return txHeight >= 0 && currentHeight-txHeight > params.nTicketMaturity;
+}
+
+static bool ticketExpired(const Consensus::Params& params, int txHeight, int currentHeight) {
+    return txHeight >= 0 && currentHeight-txHeight > params.nTicketMaturity + params.nTicketExpiry;
+}
+
+
 UniValue getstakeinfo(const JSONRPCRequest& request)
 {
     if (request.fHelp || !request.params.empty())
@@ -2848,7 +2857,103 @@ UniValue getstakeinfo(const JSONRPCRequest& request)
             + HelpExampleRpc("getstakeinfo", "")
         };
 
+    const auto pwallet = GetWalletForJSONRPCRequest(request);
+    if (!EnsureWalletIsAvailable(pwallet, request.fHelp)) {
+        return NullUniValue;
+    }
+    ObserveSafeMode();
+    LOCK2(cs_main, pwallet->cs_wallet);
+
+    auto allmempooltix = 0ul;
+    {
+        LOCK(mempool.cs);
+        auto unminedTicketCount = 0ul;
+        for (const CTxMemPoolEntry& e : mempool.mapTx) {
+            const auto& tx = e.GetTx();
+            if (ETxClass::TX_BuyTicket ==  ParseTxClass(tx)) {
+                ++unminedTicketCount;
+            }
+        }
+        allmempooltix = unminedTicketCount;
+    }
+
+    auto ownMempoolTix = 0ul;
+    auto immature = 0ul;
+    auto unspent = 0ul;
+    auto unspentExpired = 0ul;
+    for (const auto& pairWtx : pwallet->mapWallet) {
+        const auto& wtx = pairWtx.second;
+        const auto& tx = *wtx.tx;
+        if (wtx.IsCoinBase() || !CheckFinalTx(*wtx.tx))
+            continue;
+        
+        if (ETxClass::TX_BuyTicket ==  ParseTxClass(tx)) {
+            ++ownMempoolTix;
+            const auto& txHeight = chainActive.Height() - wtx.GetDepthInMainChain();
+            if (!ticketMatured(Params().GetConsensus(), txHeight, chainActive.Height())) {
+                ++immature;
+            }
+            // TODO check spent
+            // if spent {
+            //    continue;
+            //}
+            ++unspent;
+            if (ticketExpired(Params().GetConsensus(), txHeight, chainActive.Height())) {
+                ++unspentExpired;
+            }
+
+        }
+    }
+
+	// var sinfo *wallet.StakeInfoData
+	// if rpc != nil {
+	// 	sinfo, err = w.StakeInfoPrecise(ctx, rpc)
+
+	// var proportionLive, proportionMissed float64
+	// if sinfo.PoolSize > 0 {
+	// 	proportionLive = float64(sinfo.Live) / float64(sinfo.PoolSize)
+	// }
+	// if sinfo.Missed > 0 {
+	// 	proportionMissed = float64(sinfo.Missed) / (float64(sinfo.Voted + sinfo.Missed))
+	// }
+
+	// resp := &types.GetStakeInfoResult{
+	// 	BlockHeight:  sinfo.BlockHeight,
+	// 	Difficulty:   sinfo.Sdiff.ToCoin(),
+	// 	TotalSubsidy: sinfo.TotalSubsidy.ToCoin(),
+
+	// 	OwnMempoolTix:  sinfo.OwnMempoolTix,
+	// 	Immature:       sinfo.Immature,
+	// 	Unspent:        sinfo.Unspent,
+	// 	Voted:          sinfo.Voted,
+	// 	Revoked:        sinfo.Revoked,
+	// 	UnspentExpired: sinfo.UnspentExpired,
+
+	// 	PoolSize:         sinfo.PoolSize,
+	// 	AllMempoolTix:    sinfo.AllMempoolTix,
+	// 	Live:             sinfo.Live,
+	// 	ProportionLive:   proportionLive,
+	// 	Missed:           sinfo.Missed,
+	// 	ProportionMissed: proportionMissed,
+	// 	Expired:          sinfo.Expired,
+	// }
     UniValue obj{UniValue::VOBJ};
+    obj.push_back(Pair("blockheight",      chainActive.Height()));
+    obj.push_back(Pair("difficulty",       chainActive.Height()));
+    obj.push_back(Pair("totalsubsidy",     chainActive.Height()));
+    obj.push_back(Pair("ownmempooltix",    ownMempoolTix));
+    obj.push_back(Pair("immature",         immature));
+    obj.push_back(Pair("unspent",          unspent));
+    obj.push_back(Pair("voted",            chainActive.Height()));
+    obj.push_back(Pair("revoked",          chainActive.Height()));
+    obj.push_back(Pair("unspentexpired",   unspentExpired));
+    obj.push_back(Pair("poolsize",         chainActive.Height()));
+    obj.push_back(Pair("allmempooltix",    allmempooltix));
+    obj.push_back(Pair("live",             chainActive.Height()));
+    obj.push_back(Pair("proportionlive",   chainActive.Height()));
+    obj.push_back(Pair("missed",           chainActive.Height()));
+    obj.push_back(Pair("proportionmissed", chainActive.Height()));
+    obj.push_back(Pair("expired",          chainActive.Height()));
 
     return obj;
 }
